@@ -46,6 +46,16 @@ struct SettingsResponse {
     realtime_count: i64,
 }
 
+#[derive(Debug, Deserialize)]
+struct SetGroupRequest {
+    group: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MockScanRequest {
+    success: bool,
+}
+
 fn get_conn(state: &AppState) -> anyhow::Result<PooledConnection<SqliteConnectionManager>> {
     Ok(state.db.get()?)
 }
@@ -68,7 +78,7 @@ fn init_db(pool: &Pool<SqliteConnectionManager>) -> anyhow::Result<()> {
              plan_target INTEGER NOT NULL\n\
          );\n\
          INSERT OR IGNORE INTO settings (id, group_name, shift_name, plan_target)\n\
-         VALUES (1, 'A', 'Day', 1000);\n",
+         VALUES (1, 'A组', '白班', 500);\n",
     )?;
     Ok(())
 }
@@ -81,7 +91,7 @@ fn read_settings(conn: &rusqlite::Connection) -> anyhow::Result<(String, String,
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?
-        .unwrap_or_else(|| ("A".to_string(), "Day".to_string(), 1000));
+        .unwrap_or_else(|| ("A组".to_string(), "白班".to_string(), 500));
     Ok(row)
 }
 
@@ -137,18 +147,66 @@ async fn process_barcode(State(state): State<AppState>, Json(req): Json<ProcessR
 
     let (group, shift, plan_target) = match read_settings(&conn) {
         Ok(v) => v,
-        Err(_) => ("A".into(), "Day".into(), 1000),
+        Err(_) => ("A组".into(), "白班".into(), 500),
     };
     let realtime = count_success_today(&conn).unwrap_or(0);
 
     let resp = ProcessResponse {
         success,
-        message: if success { "OK".into() } else { "FAILED".into() },
+        message: if success { "扫码正确".into() } else { "扫码错误".into() },
         group,
         shift,
         plan_target,
         realtime_count: realtime,
         barcode: req.barcode,
+        timestamp: now,
+    };
+    (StatusCode::OK, Json(resp)).into_response()
+}
+
+async fn set_group(State(state): State<AppState>, Json(req): Json<SetGroupRequest>) -> impl IntoResponse {
+    let conn = match get_conn(&state) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let new_group = match req.group.as_str() {
+        "A组" | "B组" => req.group,
+        _ => return (StatusCode::BAD_REQUEST, "invalid group").into_response(),
+    };
+    if let Err(e) = conn.execute(
+        "UPDATE settings SET group_name = ?1 WHERE id = 1",
+        params![new_group],
+    ) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    get_settings(State(state)).await
+}
+
+async fn mock_scan(State(state): State<AppState>, Json(req): Json<MockScanRequest>) -> impl IntoResponse {
+    let conn = match get_conn(&state) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let now = Local::now();
+    if let Err(e) = conn.execute(
+        "INSERT INTO scans (barcode, success, ts) VALUES (?1, ?2, ?3)",
+        params!["模拟", if req.success { 1 } else { 0 }, now.to_rfc3339()],
+    ) {
+        error!("DB insert error: {}", e);
+    }
+    let (group, shift, plan_target) = match read_settings(&conn) {
+        Ok(v) => v,
+        Err(_) => ("A组".into(), "白班".into(), 500),
+    };
+    let realtime = count_success_today(&conn).unwrap_or(0);
+    let resp = ProcessResponse {
+        success: req.success,
+        message: if req.success { "扫码正确".into() } else { "扫码错误".into() },
+        group,
+        shift,
+        plan_target,
+        realtime_count: realtime,
+        barcode: "模拟".into(),
         timestamp: now,
     };
     (StatusCode::OK, Json(resp)).into_response()
@@ -176,6 +234,8 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/api/settings", get(get_settings))
         .route("/api/process_barcode", post(process_barcode))
+        .route("/api/set_group", post(set_group))
+        .route("/api/mock_scan", post(mock_scan))
         .with_state(state);
 
     let port: u16 = std::env::var("PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(8080);

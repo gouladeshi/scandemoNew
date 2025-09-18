@@ -6,11 +6,11 @@ ApplicationWindow {
     visible: true
     width: 800
     height: 480
-    title: "Scan Demo"
+    title: "扫码演示"
 
-    property string groupName: "-"
-    property string shiftName: "-"
-    property int planTarget: 0
+    property string groupName: "A组"
+    property string shiftName: "白班"
+    property int planTarget: 500
     property int realtimeCount: 0
     property string lastBarcode: ""
     property bool lastSuccess: false
@@ -50,10 +50,10 @@ ApplicationWindow {
         RowLayout {
             Layout.fillWidth: true
             spacing: 24
-            Label { text: "Group: " + groupName; font.pixelSize: 24 }
-            Label { text: "Shift: " + shiftName; font.pixelSize: 24 }
-            Label { text: "Plan: " + planTarget; font.pixelSize: 24 }
-            Label { text: "Real-time: " + realtimeCount; font.pixelSize: 24 }
+            Label { text: "当前班组：" + groupName; font.pixelSize: 24 }
+            Label { text: "班次：" + shiftName; font.pixelSize: 24 }
+            Label { text: "本班次排产量：" + planTarget; font.pixelSize: 24 }
+            Label { text: "实时产量：" + realtimeCount; font.pixelSize: 24 }
         }
 
         RowLayout {
@@ -62,11 +62,11 @@ ApplicationWindow {
             TextField {
                 id: barcodeInput
                 Layout.fillWidth: true
-                placeholderText: "Scan or input barcode, press Enter"
+                placeholderText: "请输入或扫描条码，回车提交"
                 font.pixelSize: 22
                 onAccepted: submitBarcode(text)
             }
-            Button { text: "Submit"; onClicked: submitBarcode(barcodeInput.text) }
+            Button { text: "提交"; onClicked: submitBarcode(barcodeInput.text) }
         }
 
         Rectangle {
@@ -81,9 +81,26 @@ ApplicationWindow {
                 anchors.fill: parent
                 anchors.margins: 12
                 spacing: 8
-                Label { text: "Barcode: " + lastBarcode; font.pixelSize: 24 }
-                Label { text: "Result: " + (lastSuccess ? "SUCCESS" : "FAIL"); font.pixelSize: 24 }
+                Label { text: "条码：" + lastBarcode; font.pixelSize: 24 }
+                Label { text: "结果：" + (lastSuccess ? "扫码正确" : "扫码错误"); font.pixelSize: 24 }
                 Label { text: lastMessage; color: "#555"; font.pixelSize: 18 }
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 12
+            Button {
+                text: "切换班组"
+                onClicked: switchGroup()
+            }
+            Button {
+                text: "正确条码"
+                onClicked: triggerMock(true)
+            }
+            Button {
+                text: "错误条码"
+                onClicked: triggerMock(false)
             }
         }
     }
@@ -106,10 +123,49 @@ ApplicationWindow {
                 } else {
                     lastBarcode = code;
                     lastSuccess = false;
-                    lastMessage = "Request error: " + xhr.status;
+                    lastMessage = "请求错误：" + xhr.status;
                 }
             }
         }
         xhr.send(JSON.stringify({ barcode: code }));
+    }
+
+    function switchGroup() {
+        var target = groupName === "A组" ? "B组" : "A组";
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", "http://127.0.0.1:8080/api/set_group");
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+                var data = JSON.parse(xhr.responseText);
+                groupName = data.group;
+                shiftName = data.shift;
+                planTarget = data.plan_target;
+                realtimeCount = data.realtime_count;
+            }
+        }
+        xhr.send(JSON.stringify({ group: target }));
+    }
+
+    function triggerMock(ok) {
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", "http://127.0.0.1:8080/api/mock_scan");
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === XMLHttpRequest.DONE) {
+                if (xhr.status === 200) {
+                    var data = JSON.parse(xhr.responseText);
+                    lastBarcode = data.barcode;
+                    lastSuccess = data.success;
+                    lastMessage = data.message + " @ " + data.timestamp;
+                    realtimeCount = data.realtime_count;
+                } else {
+                    lastBarcode = ok ? "模拟-正确" : "模拟-错误";
+                    lastSuccess = ok;
+                    lastMessage = "请求错误：" + xhr.status;
+                }
+            }
+        }
+        xhr.send(JSON.stringify({ success: ok }));
     }
 }
