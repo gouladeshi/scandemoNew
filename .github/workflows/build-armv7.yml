@@ -1,0 +1,36 @@
+name: Build ARMv7 Linux (Cortex-A7)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-unknown-linux-gnueabihf
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build (armv7)
+        env:
+          RUSTFLAGS: -C target-feature=+neon
+        run: cross build --target armv7-unknown-linux-gnueabihf --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-demo-armv7
+          path: |
+            target/armv7-unknown-linux-gnueabihf/release/scan_demo
+            ui/**
+            scripts/**
+            README.md
