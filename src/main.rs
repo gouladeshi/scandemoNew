@@ -179,7 +179,15 @@ async fn set_group(State(state): State<AppState>, Json(req): Json<SetGroupReques
     ) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
-    get_settings(State(state)).await
+    // Build and return concrete response instead of calling another handler
+    match (|| -> anyhow::Result<SettingsResponse> {
+        let (group, shift, plan_target) = read_settings(&conn)?;
+        let realtime = count_success_today(&conn)?;
+        Ok(SettingsResponse { group, shift, plan_target, realtime_count: realtime })
+    })() {
+        Ok(s) => (StatusCode::OK, Json(s)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 async fn mock_scan(State(state): State<AppState>, Json(req): Json<MockScanRequest>) -> impl IntoResponse {
