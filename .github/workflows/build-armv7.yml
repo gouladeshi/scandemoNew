@@ -40,15 +40,17 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf rauc openssl tar
-          cargo install cross --git https://github.com/cross-rs/cross
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf rauc openssl tar tree
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build
         env:
           RUSTFLAGS: -C target-feature=+neon
         run: cross build --target armv7-unknown-linux-gnueabihf --release
 
-      - name: Generate keys
+      - name: Generate RAUC keys
         run: |
           mkdir -p ota/keys
           if [ ! -f ota/keys/rauc.key ]; then
@@ -56,13 +58,20 @@ jobs:
             openssl req -new -x509 -key ota/keys/rauc.key -out ota/keys/rauc.cert -days 365 \
               -subj "/CN=STM32MP-OTA-Cert"
           fi
+          echo "RAUC证书信息:"
+          openssl x509 -in ota/keys/rauc.cert -noout -subject -dates
 
       - name: Create RAUC bundle
         run: |
           set -e
-          echo "创建RAUC bundle..."
+          echo "=== 创建RAUC bundle ==="
           
+          # 确保输出目录存在
+          mkdir -p ota/output
+          
+          # 创建临时bundle目录
           BUNDLE_DIR="$(mktemp -d)"
+          echo "Bundle目录: $BUNDLE_DIR"
           
           # 创建目录结构
           mkdir -p "$BUNDLE_DIR/bin"
@@ -70,32 +79,78 @@ jobs:
           mkdir -p "$BUNDLE_DIR/scripts"
           
           # 复制应用文件
+          echo "复制应用文件..."
           cp target/armv7-unknown-linux-gnueabihf/release/scan_demo "$BUNDLE_DIR/bin/"
-          [ -d "ui" ] && cp -r ui/* "$BUNDLE_DIR/ui/" 2>/dev/null || true
-          [ -d "scripts" ] && cp -r scripts/* "$BUNDLE_DIR/scripts/" 2>/dev/null || true
+          [ -d "ui" ] && cp -r ui/* "$BUNDLE_DIR/ui/" 2>/dev/null || echo "UI目录为空"
+          [ -d "scripts" ] && cp -r scripts/* "$BUNDLE_DIR/scripts/" 2>/dev/null || echo "Scripts目录为空"
           
-          # 创建manifest
+          # 创建manifest文件
+          echo "创建manifest..."
           cat > "$BUNDLE_DIR/manifest.raucm" << 'EOF'
           [update]
           compatible=STM32MP1,ScanDemo
+          version=${{ github.sha }}
+          description=Scan Demo Application Update
+          bundle.format=plain
           
           [image.app]
           filename=bin/scan_demo
+          archive=none
+          
+          [image.ui]
+          filename=ui/main.qml
+          archive=none
+          
+          [image.scripts]
+          filename=scripts/run_device.sh
+          archive=none
           EOF
           
-          # 检查目录内容
-          echo "Bundle内容:"
-          find "$BUNDLE_DIR" -type f | sort
+          # 只保留实际存在的文件到manifest中
+          cat > "$BUNDLE_DIR/manifest.raucm" << 'EOF'
+          [update]
+          compatible=STM32MP1,ScanDemo
+          version=${{ github.sha }}
+          description=Scan Demo Application Update
+          bundle.format=plain
           
-          # 创建bundle
+          [image.app]
+          filename=bin/scan_demo
+          archive=none
+          EOF
+          
+          echo "Manifest内容:"
+          cat "$BUNDLE_DIR/manifest.raucm"
+          
+          echo "Bundle目录结构:"
+          tree "$BUNDLE_DIR" || find "$BUNDLE_DIR" -type f | sort
+          
+          # 检查文件权限
+          ls -la "$BUNDLE_DIR/bin/"
+          
+          # 创建RAUC bundle
+          echo "开始打包..."
+          OUTPUT_FILE="ota/output/update-${{ github.sha }}.raucb"
+          
           rauc bundle \
             --cert=ota/keys/rauc.cert \
             --key=ota/keys/rauc.key \
             "$BUNDLE_DIR" \
-            "ota/output/update-${{ github.sha }}.raucb"
+            "$OUTPUT_FILE" || {
+              echo "RAUC打包失败!"
+              echo "检查文件:"
+              ls -la ota/keys/
+              ls -la ota/output/
+              echo "Bundle目录内容:$(mktemp -d)"
+              tree "$BUNDLE_DIR" || find "$BUNDLE_DIR" -type f
+              exit 1
+            }
           
-          echo "✓ 打包成功"
-          ls -la "ota/output/update-${{ github.sha }}.raucb"
+          echo "✓ RAUC bundle创建成功!"
+          ls -la "$OUTPUT_FILE"
+          
+          # 清理临时目录
+          rm -rf "$BUNDLE_DIR"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
