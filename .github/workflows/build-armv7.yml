@@ -48,27 +48,6 @@ jobs:
           RUSTFLAGS: -C target-feature=+neon
         run: cross build --target armv7-unknown-linux-gnueabihf --release
 
-      - name: Prepare OTA files
-        run: |
-          set -e
-          mkdir -p ota/output ota/keys
-          STAGE="$(mktemp -d)"
-          mkdir -p "$STAGE/opt/scan-demo" "$STAGE/usr/local/bin"
-          
-          cp target/armv7-unknown-linux-gnueabihf/release/scan_demo "$STAGE/opt/scan-demo/"
-          cp -r ui "$STAGE/opt/scan-demo/"
-          cp -r scripts "$STAGE/opt/scan-demo/"
-          
-          cat > "$STAGE/usr/local/bin/start-scan-demo.sh" << 'EOS'
-          #!/bin/sh
-          cd /opt/scan-demo
-          export DISPLAY=:0
-          ./scan_demo &
-          EOS
-          chmod +x "$STAGE/usr/local/bin/start-scan-demo.sh"
-          
-          tar -czf ota/output/app-update.tar.gz -C "$STAGE" .
-
       - name: Generate keys
         run: |
           mkdir -p ota/keys
@@ -83,10 +62,32 @@ jobs:
           set -e
           echo "创建RAUC bundle..."
           
-          # 方法1: 解压方式（推荐）
           BUNDLE_DIR="$(mktemp -d)"
-          tar -xzf ota/output/app-update.tar.gz -C "$BUNDLE_DIR"
           
+          # 创建目录结构
+          mkdir -p "$BUNDLE_DIR/bin"
+          mkdir -p "$BUNDLE_DIR/ui"
+          mkdir -p "$BUNDLE_DIR/scripts"
+          
+          # 复制应用文件
+          cp target/armv7-unknown-linux-gnueabihf/release/scan_demo "$BUNDLE_DIR/bin/"
+          [ -d "ui" ] && cp -r ui/* "$BUNDLE_DIR/ui/" 2>/dev/null || true
+          [ -d "scripts" ] && cp -r scripts/* "$BUNDLE_DIR/scripts/" 2>/dev/null || true
+          
+          # 创建manifest
+          cat > "$BUNDLE_DIR/manifest.raucm" << 'EOF'
+          [update]
+          compatible=STM32MP1,ScanDemo
+          
+          [image.app]
+          filename=bin/scan_demo
+          EOF
+          
+          # 检查目录内容
+          echo "Bundle内容:"
+          find "$BUNDLE_DIR" -type f | sort
+          
+          # 创建bundle
           rauc bundle \
             --cert=ota/keys/rauc.cert \
             --key=ota/keys/rauc.key \
