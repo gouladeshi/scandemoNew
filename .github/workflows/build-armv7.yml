@@ -8,34 +8,24 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 可选：Cargo/Target 缓存加速
-      - name: Cache cargo registry
+      - name: Cache cargo
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-      - name: Cache cargo git
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-      - name: Cache target
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-target-armv7-${{ hashFiles('**/Cargo.lock') }}
+          path: |
+            ~/.cargo/registry
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: armv7-unknown-linux-gnueabihf
 
-      - name: Configure Cargo (USTC mirror + linker)
+      - name: Configure Cargo
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
@@ -47,29 +37,28 @@ jobs:
           linker = "arm-linux-gnueabihf-gcc"
           EOF
 
-      - name: Install cross and toolchain
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf rauc openssl tar
           cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Build (armv7)
+      - name: Build
         env:
           RUSTFLAGS: -C target-feature=+neon
         run: cross build --target armv7-unknown-linux-gnueabihf --release
 
-      - name: Prepare OTA staging
+      - name: Prepare OTA files
         run: |
           set -e
+          mkdir -p ota/output ota/keys
           STAGE="$(mktemp -d)"
-          mkdir -p "$STAGE/opt/scan-demo" "$STAGE/usr/local/bin" ota/output ota/keys
-
-          # 复制二进制、UI、脚本
+          mkdir -p "$STAGE/opt/scan-demo" "$STAGE/usr/local/bin"
+          
           cp target/armv7-unknown-linux-gnueabihf/release/scan_demo "$STAGE/opt/scan-demo/"
           cp -r ui "$STAGE/opt/scan-demo/"
           cp -r scripts "$STAGE/opt/scan-demo/"
-
-          # 生成启动脚本（设备端）
+          
           cat > "$STAGE/usr/local/bin/start-scan-demo.sh" << 'EOS'
           #!/bin/sh
           cd /opt/scan-demo
@@ -77,31 +66,37 @@ jobs:
           ./scan_demo &
           EOS
           chmod +x "$STAGE/usr/local/bin/start-scan-demo.sh"
-
-          # 打tar作为应用载荷
+          
           tar -czf ota/output/app-update.tar.gz -C "$STAGE" .
 
-      - name: Generate RAUC key/cert if missing
+      - name: Generate keys
         run: |
+          mkdir -p ota/keys
           if [ ! -f ota/keys/rauc.key ]; then
             openssl genrsa -out ota/keys/rauc.key 2048
             openssl req -new -x509 -key ota/keys/rauc.key -out ota/keys/rauc.cert -days 365 \
               -subj "/CN=STM32MP-OTA-Cert"
           fi
-          # 显示证书信息（调试）
-          openssl x509 -in ota/keys/rauc.cert -noout -subject -dates
 
       - name: Create RAUC bundle
         run: |
           set -e
-          mkdir -p ota/output
+          echo "创建RAUC bundle..."
+          
+          # 方法1: 解压方式（推荐）
+          BUNDLE_DIR="$(mktemp -d)"
+          tar -xzf ota/output/app-update.tar.gz -C "$BUNDLE_DIR"
+          
           rauc bundle \
             --cert=ota/keys/rauc.cert \
             --key=ota/keys/rauc.key \
-            --include=ota/output/app-update.tar.gz \
+            "$BUNDLE_DIR" \
             "ota/output/update-${{ github.sha }}.raucb"
+          
+          echo "✓ 打包成功"
+          ls -la "ota/output/update-${{ github.sha }}.raucb"
 
-      - name: Upload artifact (binary + UI + scripts + OTA bundle)
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: scan-demo-ota-armv7
@@ -109,7 +104,5 @@ jobs:
             target/armv7-unknown-linux-gnueabihf/release/scan_demo
             ui/**
             scripts/**
-            ota/output/app-update.tar.gz
             ota/output/update-${{ github.sha }}.raucb
             ota/keys/rauc.cert
-            README.md
