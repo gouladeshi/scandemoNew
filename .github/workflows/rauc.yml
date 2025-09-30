@@ -209,8 +209,15 @@ jobs:
           elif [ -f "rauc.tar.gz" ] && [ -s "rauc.tar.gz" ]; then
             echo "使用预编译的 RAUC 包"
             tar -xf rauc.tar.gz
+            echo "解压后的目录内容:"
+            find . -name "*rauc*" -type f
+            echo "查找可执行文件:"
+            find . -name "rauc" -type f -executable
             # 查找预编译包中的二进制文件
-            if find . -name "rauc" -type f -executable | head -1 | xargs -I {} cp {} rauc-deploy/usr/bin/; then
+            RAUC_BINARY=$(find . -name "rauc" -type f -executable | head -1)
+            if [ -n "$RAUC_BINARY" ]; then
+              echo "找到 RAUC 二进制文件: $RAUC_BINARY"
+              cp "$RAUC_BINARY" rauc-deploy/usr/bin/
               echo "预编译包中的 RAUC 二进制文件复制成功"
             else
               echo "预编译包中没有找到 RAUC 二进制文件，创建替代脚本"
