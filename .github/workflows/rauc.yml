@@ -236,8 +236,21 @@ jobs:
           
           # 创建安装脚本
           cat > rauc-deploy/install.sh << 'INSTALL_EOF'
-          #!/bin/bash
+          #!/bin/sh
           echo "=== 安装 RAUC (ARM 版本) ==="
+          
+          # 检查文件是否存在
+          if [ ! -f "usr/local/bin/rauc" ]; then
+              echo "错误: 找不到 usr/local/bin/rauc 文件"
+              echo "当前目录内容:"
+              ls -la
+              echo "usr/local/bin 目录内容:"
+              ls -la usr/local/bin/ 2>/dev/null || echo "usr/local/bin 目录不存在"
+              exit 1
+          fi
+          
+          # 创建目标目录（如果不存在）
+          mkdir -p /usr/local/bin
           
           # 复制二进制文件
           cp usr/local/bin/rauc /usr/local/bin/
