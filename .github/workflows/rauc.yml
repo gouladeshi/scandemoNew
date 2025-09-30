@@ -13,31 +13,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build RAUC using Docker
+      - name: Install RAUC and create deployment package
         run: |
-          # 使用 Docker 构建 RAUC
-          docker run --rm -v $(pwd):/output ubuntu:20.04 bash -c "
-            apt update && \
-            apt install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf build-essential cmake pkg-config libssl-dev libglib2.0-dev libjson-glib-dev libcurl4-openssl-dev git wget && \
-            cd /tmp && \
-            git clone --depth 1 https://github.com/rauc/rauc.git && \
-            cd rauc && \
-            echo '源码目录内容:' && \
-            ls -la && \
-            echo '查找 CMakeLists.txt:' && \
-            find . -name 'CMakeLists.txt' -type f && \
-            mkdir build && cd build && \
-            export CC=arm-linux-gnueabihf-gcc && \
-            export CXX=arm-linux-gnueabihf-g++ && \
-            cmake .. -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=arm -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ && \
-            make -j4 && \
-            echo '编译完成，检查结果:' && \
-            file src/rauc && \
-            mkdir -p /output/rauc-deploy/usr/local/bin /output/rauc-deploy/etc/rauc && \
-            cp src/rauc /output/rauc-deploy/usr/local/bin/ && \
-            openssl genrsa -out /output/rauc-deploy/etc/rauc/rauc.key 2048 && \
-            openssl req -new -x509 -key /output/rauc-deploy/etc/rauc/rauc.key -out /output/rauc-deploy/etc/rauc/rauc.cert -days 365 -subj '/CN=STM32MP-OTA-Cert' && \
-            cat > /output/rauc-deploy/etc/rauc/system.conf << 'EOF'
+          # 安装 RAUC
+          sudo apt-get update
+          sudo apt-get install -y rauc
+          
+          # 创建部署目录结构
+          mkdir -p rauc-deploy/usr/local/bin
+          mkdir -p rauc-deploy/etc/rauc
+          
+          # 复制 RAUC 二进制文件
+          cp /usr/bin/rauc rauc-deploy/usr/local/bin/
+          
+          # 创建系统配置文件
+          cat > rauc-deploy/etc/rauc/system.conf << 'EOF'
           [system]
           compatible=STM32MP1,ScanDemo
           bootloader=u-boot
@@ -52,13 +42,17 @@ jobs:
           type=ext4
           bootname=B
           EOF
-          "
-
-      - name: Create installation script
-        run: |
+          
+          # 生成密钥和证书
+          openssl genrsa -out rauc-deploy/etc/rauc/rauc.key 2048
+          openssl req -new -x509 -key rauc-deploy/etc/rauc/rauc.key \
+            -out rauc-deploy/etc/rauc/rauc.cert -days 365 \
+            -subj "/CN=STM32MP-OTA-Cert"
+          
+          # 创建安装脚本
           cat > rauc-deploy/install.sh << 'EOF'
           #!/bin/bash
-          echo "=== 安装 RAUC (ARM 版本) ==="
+          echo "=== 安装 RAUC ==="
           
           # 复制二进制文件
           cp usr/local/bin/rauc /usr/local/bin/
@@ -78,17 +72,17 @@ jobs:
           /usr/local/bin/rauc --version
           /usr/local/bin/rauc status
           
-          echo "✓ RAUC (ARM 版本) 安装完成"
+          echo "✓ RAUC 安装完成"
           EOF
           
           chmod +x rauc-deploy/install.sh
           
-          # 验证 ARM 版本
-          echo "验证 ARM 版本:"
-          file rauc-deploy/usr/local/bin/rauc
-          
           # 打包
           tar -czf rauc-deploy.tar.gz rauc-deploy/
+          
+          # 显示包内容
+          echo "部署包内容:"
+          tar -tzf rauc-deploy.tar.gz | head -20
 
       - name: Upload RAUC deployment package
         uses: actions/upload-artifact@v4
