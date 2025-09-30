@@ -84,7 +84,7 @@ jobs:
             echo "源码编译失败，尝试使用 Docker 交叉编译..."
             
             # 创建 Dockerfile
-            cat > Dockerfile.rauc << 'EOF'
+            cat > Dockerfile.rauc << 'DOCKER_EOF'
             FROM ubuntu:20.04
             
             RUN apt-get update && apt-get install -y \
@@ -115,7 +115,7 @@ jobs:
                 make -j$(nproc)
             
             CMD ["cp", "rauc-1.14/build/src/rauc", "/output/rauc"]
-            EOF
+            DOCKER_EOF
             
             # 构建并运行 Docker 容器
             docker build -f Dockerfile.rauc -t rauc-builder .
@@ -138,7 +138,7 @@ jobs:
             echo "所有编译方法都失败，创建简单的 RAUC 替代脚本..."
             
             # 创建一个简单的 RAUC 替代脚本
-            cat > rauc-simple.sh << 'EOF'
+            cat > rauc-simple.sh << 'SCRIPT_EOF'
             #!/bin/bash
             # 简单的 RAUC 替代脚本
             
@@ -166,7 +166,7 @@ jobs:
                 echo "这是一个简单的 RAUC 替代脚本"
                 ;;
             esac
-            EOF
+            SCRIPT_EOF
             
             chmod +x rauc-simple.sh
             mkdir -p rauc/build/src
@@ -198,7 +198,7 @@ jobs:
           file rauc-deploy/usr/local/bin/rauc
           
           # 创建系统配置文件
-          cat > rauc-deploy/etc/rauc/system.conf << 'EOF'
+          cat > rauc-deploy/etc/rauc/system.conf << 'CONF_EOF'
           [system]
           compatible=STM32MP1,ScanDemo
           bootloader=u-boot
@@ -212,7 +212,7 @@ jobs:
           device=/dev/mmcblk0p3
           type=ext4
           bootname=B
-          EOF
+          CONF_EOF
           
           # 生成密钥和证书
           openssl genrsa -out rauc-deploy/etc/rauc/rauc.key 2048
@@ -221,7 +221,7 @@ jobs:
             -subj "/CN=STM32MP-OTA-Cert"
           
           # 创建安装脚本
-          cat > rauc-deploy/install.sh << 'EOF'
+          cat > rauc-deploy/install.sh << 'INSTALL_EOF'
           #!/bin/bash
           echo "=== 安装 RAUC (ARM 版本) ==="
           
@@ -244,12 +244,12 @@ jobs:
           /usr/local/bin/rauc status
           
           echo "✓ RAUC (ARM 版本) 安装完成"
-          EOF
+          INSTALL_EOF
           
           chmod +x rauc-deploy/install.sh
           
           # 创建使用说明
-          cat > rauc-deploy/README.md << 'EOF'
+          cat > rauc-deploy/README.md << 'README_EOF'
           # RAUC ARM 部署包
           
           ## 说明
@@ -276,7 +276,7 @@ jobs:
           /usr/local/bin/rauc --version
           /usr/local/bin/rauc status
           ```
-          EOF
+          README_EOF
           
           # 打包
           tar -czf rauc-deploy.tar.gz rauc-deploy/
