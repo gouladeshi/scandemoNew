@@ -26,15 +26,27 @@ jobs:
         run: |
           # 下载 RAUC 源码
           git clone --depth 1 https://github.com/rauc/rauc.git
-          cd rauc
           
           # 检查源码结构
           echo "源码目录内容:"
-          ls -la
+          ls -la rauc/
           
           # 查找 CMakeLists.txt
           echo "查找 CMakeLists.txt:"
-          find . -name "CMakeLists.txt" -type f
+          find rauc/ -name "CMakeLists.txt" -type f
+          
+          # 检查是否有 CMakeLists.txt
+          if [ ! -f "rauc/CMakeLists.txt" ]; then
+            echo "错误: 未找到 CMakeLists.txt"
+            echo "尝试从主分支获取:"
+            rm -rf rauc
+            git clone --depth 1 --branch main https://github.com/rauc/rauc.git
+            ls -la rauc/
+            find rauc/ -name "CMakeLists.txt" -type f
+          fi
+          
+          # 进入源码目录
+          cd rauc
           
           # 配置交叉编译
           mkdir build && cd build
