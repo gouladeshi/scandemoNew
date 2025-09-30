@@ -195,35 +195,15 @@ jobs:
           else
             echo "所有编译方法都失败，创建简单的 RAUC 替代脚本..."
             # 创建一个简单的 RAUC 替代脚本
-            cat > rauc-deploy/usr/local/bin/rauc << 'RAUC_SCRIPT_EOF'
-          #!/bin/sh
-          # 简单的 RAUC 替代脚本
-          
-          case "$1" in
-            "bundle")
-              echo "RAUC Bundle: $2"
-              echo "这是一个简单的 RAUC 替代脚本"
-              echo "实际部署时请使用真正的 RAUC"
-              ;;
-            "install")
-              echo "安装更新: $2"
-              echo "这是一个简单的 RAUC 替代脚本"
-              echo "实际部署时请使用真正的 RAUC"
-              ;;
-            "status")
-              echo "RAUC 状态: 未安装"
-              echo "这是一个简单的 RAUC 替代脚本"
-              ;;
-            "--version")
-              echo "rauc-simple 1.0.0"
-              echo "这是一个简单的 RAUC 替代脚本"
-              ;;
-            *)
-              echo "用法: $0 {bundle|install|status|--version}"
-              echo "这是一个简单的 RAUC 替代脚本"
-              ;;
-          esac
-          RAUC_SCRIPT_EOF
+            echo '#!/bin/sh' > rauc-deploy/usr/local/bin/rauc
+            echo '# 简单的 RAUC 替代脚本' >> rauc-deploy/usr/local/bin/rauc
+            echo 'case "$1" in' >> rauc-deploy/usr/local/bin/rauc
+            echo '  "bundle") echo "RAUC Bundle: $2" ;;' >> rauc-deploy/usr/local/bin/rauc
+            echo '  "install") echo "安装更新: $2" ;;' >> rauc-deploy/usr/local/bin/rauc
+            echo '  "status") echo "RAUC 状态: 未安装" ;;' >> rauc-deploy/usr/local/bin/rauc
+            echo '  "--version") echo "rauc-simple 1.0.0" ;;' >> rauc-deploy/usr/local/bin/rauc
+            echo '  *) echo "用法: $0 {bundle|install|status|--version}" ;;' >> rauc-deploy/usr/local/bin/rauc
+            echo 'esac' >> rauc-deploy/usr/local/bin/rauc
             chmod +x rauc-deploy/usr/local/bin/rauc
             echo "创建了简单的 RAUC 替代脚本"
           fi
