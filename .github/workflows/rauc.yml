@@ -281,12 +281,22 @@ jobs:
           ```
           README_EOF
           
+          # 验证文件权限
+          echo "验证文件权限:"
+          ls -la rauc-deploy/install.sh
+          ls -la rauc-deploy/usr/local/bin/rauc
+          
           # 打包
           tar -czf rauc-deploy.tar.gz rauc-deploy/
           
           # 显示包内容
           echo "部署包内容:"
           tar -tzf rauc-deploy.tar.gz | head -20
+          
+          # 验证打包后的文件
+          echo "验证打包后的文件:"
+          tar -tzf rauc-deploy.tar.gz | grep install.sh
+          tar -tzf rauc-deploy.tar.gz | grep rauc
 
       - name: Upload RAUC deployment package
         uses: actions/upload-artifact@v4
