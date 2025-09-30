@@ -13,71 +13,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install ARM cross-compilation tools
+      - name: Build RAUC using Docker
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
-          sudo apt-get install -y libc6-dev-armhf-cross
-          sudo apt-get install -y build-essential cmake pkg-config
-          sudo apt-get install -y libssl-dev libglib2.0-dev libjson-glib-dev
-          sudo apt-get install -y libcurl4-openssl-dev
-
-      - name: Download and compile RAUC for ARM
-        run: |
-          # 下载 RAUC 源码
-          git clone --depth 1 https://github.com/rauc/rauc.git
-          cd rauc
-          
-          # 检查源码结构
-          echo "源码目录内容:"
-          ls -la
-          
-          # 检查 CMakeLists.txt
-          if [ -f "CMakeLists.txt" ]; then
-            echo "✓ 找到 CMakeLists.txt"
-          else
-            echo "✗ 未找到 CMakeLists.txt"
-            echo "当前目录: $(pwd)"
-            echo "目录内容:"
-            ls -la
-            exit 1
-          fi
-          
-          # 配置交叉编译
-          mkdir build && cd build
-          export CC=arm-linux-gnueabihf-gcc
-          export CXX=arm-linux-gnueabihf-g++
-          export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
-          
-          # 配置 CMake
-          cmake .. \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=arm \
-            -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
-            -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ \
-            -DCMAKE_FIND_ROOT_PATH=/usr/arm-linux-gnueabihf
-          
-          # 编译
-          make -j$(nproc)
-          
-          # 验证编译结果
-          file src/rauc
-          ls -la src/rauc
-
-      - name: Create RAUC deployment package
-        run: |
-          # 创建部署目录结构
-          mkdir -p rauc-deploy/usr/local/bin
-          mkdir -p rauc-deploy/etc/rauc
-          
-          # 复制 ARM 版本的 RAUC 二进制文件
-          cp rauc/build/src/rauc rauc-deploy/usr/local/bin/
-          
-          # 验证是 ARM 版本
-          file rauc-deploy/usr/local/bin/rauc
-          
-          # 创建系统配置文件
-          cat > rauc-deploy/etc/rauc/system.conf << 'EOF'
+          # 使用 Docker 构建 RAUC
+          docker run --rm -v $(pwd):/output ubuntu:20.04 bash -c "
+            apt update && \
+            apt install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf build-essential cmake pkg-config libssl-dev libglib2.0-dev libjson-glib-dev libcurl4-openssl-dev git wget && \
+            cd /tmp && \
+            git clone --depth 1 https://github.com/rauc/rauc.git && \
+            cd rauc && \
+            echo '源码目录内容:' && \
+            ls -la && \
+            echo '查找 CMakeLists.txt:' && \
+            find . -name 'CMakeLists.txt' -type f && \
+            mkdir build && cd build && \
+            export CC=arm-linux-gnueabihf-gcc && \
+            export CXX=arm-linux-gnueabihf-g++ && \
+            cmake .. -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=arm -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ && \
+            make -j4 && \
+            echo '编译完成，检查结果:' && \
+            file src/rauc && \
+            mkdir -p /output/rauc-deploy/usr/local/bin /output/rauc-deploy/etc/rauc && \
+            cp src/rauc /output/rauc-deploy/usr/local/bin/ && \
+            openssl genrsa -out /output/rauc-deploy/etc/rauc/rauc.key 2048 && \
+            openssl req -new -x509 -key /output/rauc-deploy/etc/rauc/rauc.key -out /output/rauc-deploy/etc/rauc/rauc.cert -days 365 -subj '/CN=STM32MP-OTA-Cert' && \
+            cat > /output/rauc-deploy/etc/rauc/system.conf << 'EOF'
           [system]
           compatible=STM32MP1,ScanDemo
           bootloader=u-boot
@@ -92,14 +52,10 @@ jobs:
           type=ext4
           bootname=B
           EOF
-          
-          # 生成密钥和证书
-          openssl genrsa -out rauc-deploy/etc/rauc/rauc.key 2048
-          openssl req -new -x509 -key rauc-deploy/etc/rauc/rauc.key \
-            -out rauc-deploy/etc/rauc/rauc.cert -days 365 \
-            -subj "/CN=STM32MP-OTA-Cert"
-          
-          # 创建安装脚本
+          "
+
+      - name: Create installation script
+        run: |
           cat > rauc-deploy/install.sh << 'EOF'
           #!/bin/bash
           echo "=== 安装 RAUC (ARM 版本) ==="
@@ -127,12 +83,12 @@ jobs:
           
           chmod +x rauc-deploy/install.sh
           
+          # 验证 ARM 版本
+          echo "验证 ARM 版本:"
+          file rauc-deploy/usr/local/bin/rauc
+          
           # 打包
           tar -czf rauc-deploy.tar.gz rauc-deploy/
-          
-          # 显示包内容
-          echo "部署包内容:"
-          tar -tzf rauc-deploy.tar.gz | head -20
 
       - name: Upload RAUC deployment package
         uses: actions/upload-artifact@v4
