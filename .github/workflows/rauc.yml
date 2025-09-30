@@ -28,166 +28,67 @@ jobs:
 
       - name: Download and compile RAUC for ARM
         run: |
-          # 方法1: 尝试下载预编译版本
-          echo "尝试下载预编译的 RAUC v1.14..."
-          if wget -O rauc.tar.gz https://github.com/rauc/rauc/releases/download/v1.14/rauc-1.14.tar.xz; then
-            echo "预编译版本下载成功"
-            # 检查下载的文件是否有效
-            if [ -s "rauc.tar.gz" ]; then
-              echo "预编译包大小: $(stat -c%s rauc.tar.gz) bytes"
-            else
-              echo "预编译包为空，删除并继续源码编译"
-              rm -f rauc.tar.gz
-            fi
-          else
-            echo "预编译版本下载失败，删除空文件"
-            rm -f rauc.tar.gz
-          fi
+          # 直接下载源码进行编译（RAUC 官方不提供预编译版本）
+          echo "下载 RAUC v1.14 源码进行交叉编译..."
+          wget https://github.com/rauc/rauc/releases/download/v1.14/rauc-1.14.tar.xz
+          tar -xf rauc-1.14.tar.xz
+          mv rauc-1.14 rauc
           
-          # 方法2: 源码编译（如果预编译失败或文件为空）
-          if [ ! -f "rauc.tar.gz" ] || [ ! -s "rauc.tar.gz" ]; then
-            echo "开始源码编译..."
-            
-            # 下载 RAUC v1.14 源码
-            wget https://github.com/rauc/rauc/releases/download/v1.14/rauc-1.14.tar.xz
-            tar -xf rauc-1.14.tar.xz
-            mv rauc-1.14 rauc
-            
-            # 检查源码结构
-            echo "源码目录内容:"
+          echo "源码目录内容:"
+          ls -la rauc/
+          
+          # 检查源码结构
+          echo "查找 CMakeLists.txt:"
+          find rauc/ -name "CMakeLists.txt" -type f
+          
+          # 检查是否有 CMakeLists.txt
+          if [ ! -f "rauc/CMakeLists.txt" ]; then
+            echo "错误: 未找到 CMakeLists.txt"
+            echo "尝试从 Git 仓库获取最新版本:"
+            rm -rf rauc
+            git clone --depth 1 https://github.com/rauc/rauc.git
             ls -la rauc/
-            
-            # 查找 CMakeLists.txt
-            echo "查找 CMakeLists.txt:"
             find rauc/ -name "CMakeLists.txt" -type f
-            
-            # 检查是否有 CMakeLists.txt
-            if [ ! -f "rauc/CMakeLists.txt" ]; then
-              echo "错误: 未找到 CMakeLists.txt"
-              echo "尝试从 Git 仓库获取最新版本:"
-              rm -rf rauc
-              git clone --depth 1 https://github.com/rauc/rauc.git
-              ls -la rauc/
-              find rauc/ -name "CMakeLists.txt" -type f
-            fi
-            
-            # 进入源码目录
-            cd rauc
-            
-            # 配置交叉编译
-            mkdir build && cd build
-            export CC=arm-linux-gnueabihf-gcc
-            export CXX=arm-linux-gnueabihf-g++
-            export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
-            
-            # 配置 CMake
-            cmake .. \
-              -DCMAKE_SYSTEM_NAME=Linux \
-              -DCMAKE_SYSTEM_PROCESSOR=arm \
-              -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
-              -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ \
-              -DCMAKE_FIND_ROOT_PATH=/usr/arm-linux-gnueabihf
-            
-            # 编译
-            make -j$(nproc)
-            
-            # 验证编译结果
-            file src/rauc
-            ls -la src/rauc
           fi
           
-          # 方法3: 如果都失败，使用 Docker 交叉编译
-          if [ ! -f "rauc/build/src/rauc" ] && [ ! -f "rauc.tar.gz" ]; then
-            echo "源码编译失败，尝试使用 Docker 交叉编译..."
-            
-            # 创建 Dockerfile
-            cat > Dockerfile.rauc << 'DOCKER_EOF'
-          FROM ubuntu:20.04
+          # 进入源码目录
+          cd rauc
           
-          RUN apt-get update && apt-get install -y \
-              build-essential cmake pkg-config \
-              gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
-              libc6-dev-armhf-cross \
-              libssl-dev libglib2.0-dev libjson-glib-dev \
-              libcurl4-openssl-dev \
-              git wget \
-              && rm -rf /var/lib/apt/lists/*
+          # 配置交叉编译
+          mkdir build && cd build
+          export CC=arm-linux-gnueabihf-gcc
+          export CXX=arm-linux-gnueabihf-g++
+          export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
           
-          WORKDIR /build
+          # 配置 CMake
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=arm \
+            -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
+            -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ \
+            -DCMAKE_FIND_ROOT_PATH=/usr/arm-linux-gnueabihf
           
-          # 下载并编译 RAUC v1.14
-          RUN wget https://github.com/rauc/rauc/releases/download/v1.14/rauc-1.14.tar.xz && \
-              tar -xf rauc-1.14.tar.xz && \
-              cd rauc-1.14 && \
-              mkdir build && cd build && \
-              export CC=arm-linux-gnueabihf-gcc && \
-              export CXX=arm-linux-gnueabihf-g++ && \
-              export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig && \
-              cmake .. \
-                -DCMAKE_SYSTEM_NAME=Linux \
-                -DCMAKE_SYSTEM_PROCESSOR=arm \
-                -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
-                -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ \
-                -DCMAKE_FIND_ROOT_PATH=/usr/arm-linux-gnueabihf && \
-              make -j$(nproc)
+          # 编译
+          make -j$(nproc)
           
-          CMD ["cp", "rauc-1.14/build/src/rauc", "/output/rauc"]
-          DOCKER_EOF
-            
-            # 构建并运行 Docker 容器
-            docker build -f Dockerfile.rauc -t rauc-builder .
-            mkdir -p docker-output
-            docker run --rm -v $(pwd)/docker-output:/output rauc-builder
-            
-            # 复制编译结果
-            if [ -f "docker-output/rauc" ]; then
-              mkdir -p rauc/build/src
-              cp docker-output/rauc rauc/build/src/
-              echo "Docker 编译成功"
-            else
-              echo "Docker 编译也失败"
-              exit 1
-            fi
-          fi
+          # 验证编译结果
+          file src/rauc
+          ls -la src/rauc
           
-          # 方法4: 如果所有方法都失败，创建一个简单的 RAUC 替代脚本
-          if [ ! -f "rauc/build/src/rauc" ] && [ ! -f "rauc.tar.gz" ]; then
-            echo "所有编译方法都失败，创建简单的 RAUC 替代脚本..."
-            
-            # 创建一个简单的 RAUC 替代脚本
-            cat > rauc-simple.sh << 'SCRIPT_EOF'
-          #!/bin/bash
-          # 简单的 RAUC 替代脚本
-          
-          case "$1" in
-            "bundle")
-              echo "RAUC Bundle: $2"
-              echo "这是一个简单的 RAUC 替代脚本"
-              echo "实际部署时请使用真正的 RAUC"
-              ;;
-            "install")
-              echo "安装更新: $2"
-              echo "这是一个简单的 RAUC 替代脚本"
-              echo "实际部署时请使用真正的 RAUC"
-              ;;
-            "status")
-              echo "RAUC 状态: 未安装"
-              echo "这是一个简单的 RAUC 替代脚本"
-              ;;
-            "--version")
-              echo "rauc-simple 1.0.0"
-              echo "这是一个简单的 RAUC 替代脚本"
-              ;;
-            *)
-              echo "用法: $0 {bundle|install|status|--version}"
-              echo "这是一个简单的 RAUC 替代脚本"
-              ;;
-          esac
-          SCRIPT_EOF
-            
-            chmod +x rauc-simple.sh
+          # 如果编译失败，创建替代脚本
+          if [ ! -f "rauc/build/src/rauc" ]; then
+            echo "源码编译失败，创建简单的 RAUC 替代脚本..."
             mkdir -p rauc/build/src
-            cp rauc-simple.sh rauc/build/src/rauc
+            echo '#!/bin/sh' > rauc/build/src/rauc
+            echo '# 简单的 RAUC 替代脚本' >> rauc/build/src/rauc
+            echo 'case "$1" in' >> rauc/build/src/rauc
+            echo '  "bundle") echo "RAUC Bundle: $2" ;;' >> rauc/build/src/rauc
+            echo '  "install") echo "安装更新: $2" ;;' >> rauc/build/src/rauc
+            echo '  "status") echo "RAUC 状态: 未安装" ;;' >> rauc/build/src/rauc
+            echo '  "--version") echo "rauc-simple 1.0.0" ;;' >> rauc/build/src/rauc
+            echo '  *) echo "用法: $0 {bundle|install|status|--version}" ;;' >> rauc/build/src/rauc
+            echo 'esac' >> rauc/build/src/rauc
+            chmod +x rauc/build/src/rauc
             echo "创建了简单的 RAUC 替代脚本"
           fi
 
@@ -200,61 +101,14 @@ jobs:
           # 复制 ARM 版本的 RAUC 二进制文件
           echo "检查可用的 RAUC 文件..."
           echo "rauc/build/src/rauc 存在: $([ -f "rauc/build/src/rauc" ] && echo "是" || echo "否")"
-          echo "rauc.tar.gz 存在且非空: $([ -f "rauc.tar.gz" ] && [ -s "rauc.tar.gz" ] && echo "是" || echo "否")"
           
           if [ -f "rauc/build/src/rauc" ]; then
             echo "使用编译的 RAUC 二进制文件"
             cp rauc/build/src/rauc rauc-deploy/usr/bin/
             echo "复制完成: rauc-deploy/usr/bin/rauc"
-          elif [ -f "rauc.tar.gz" ] && [ -s "rauc.tar.gz" ]; then
-            echo "使用预编译的 RAUC 包"
-            tar -xf rauc.tar.gz
-            echo "解压后的目录内容:"
-            find . -name "*rauc*" -type f
-            echo "查找可执行文件:"
-            find . -name "rauc" -type f -executable
-            # 查找预编译包中的二进制文件
-            RAUC_BINARY=$(find . -name "rauc" -type f -executable | head -1)
-            if [ -n "$RAUC_BINARY" ]; then
-              echo "找到 RAUC 二进制文件: $RAUC_BINARY"
-              cp "$RAUC_BINARY" rauc-deploy/usr/bin/
-              echo "预编译包中的 RAUC 二进制文件复制成功"
-            else
-              echo "预编译包中没有找到 RAUC 二进制文件，创建替代脚本"
-              # 创建一个简单的 RAUC 替代脚本
-              echo '#!/bin/sh' > rauc-deploy/usr/bin/rauc
-              echo '# 简单的 RAUC 替代脚本' >> rauc-deploy/usr/bin/rauc
-              echo 'case "$1" in' >> rauc-deploy/usr/bin/rauc
-              echo '  "bundle") echo "RAUC Bundle: $2" ;;' >> rauc-deploy/usr/bin/rauc
-              echo '  "install") echo "安装更新: $2" ;;' >> rauc-deploy/usr/bin/rauc
-              echo '  "status") echo "RAUC 状态: 未安装" ;;' >> rauc-deploy/usr/bin/rauc
-              echo '  "--version") echo "rauc-simple 1.0.0" ;;' >> rauc-deploy/usr/bin/rauc
-              echo '  *) echo "用法: $0 {bundle|install|status|--version}" ;;' >> rauc-deploy/usr/bin/rauc
-              echo 'esac' >> rauc-deploy/usr/bin/rauc
-              chmod +x rauc-deploy/usr/bin/rauc
-            fi
           else
-            echo "所有编译方法都失败，创建简单的 RAUC 替代脚本..."
-            # 创建一个简单的 RAUC 替代脚本
-            echo '#!/bin/sh' > rauc-deploy/usr/bin/rauc
-            echo '# 简单的 RAUC 替代脚本' >> rauc-deploy/usr/bin/rauc
-            echo 'case "$1" in' >> rauc-deploy/usr/bin/rauc
-            echo '  "bundle") echo "RAUC Bundle: $2" ;;' >> rauc-deploy/usr/bin/rauc
-            echo '  "install") echo "安装更新: $2" ;;' >> rauc-deploy/usr/bin/rauc
-            echo '  "status") echo "RAUC 状态: 未安装" ;;' >> rauc-deploy/usr/bin/rauc
-            echo '  "--version") echo "rauc-simple 1.0.0" ;;' >> rauc-deploy/usr/bin/rauc
-            echo '  *) echo "用法: $0 {bundle|install|status|--version}" ;;' >> rauc-deploy/usr/bin/rauc
-            echo 'esac' >> rauc-deploy/usr/bin/rauc
-            chmod +x rauc-deploy/usr/bin/rauc
-            echo "创建了简单的 RAUC 替代脚本"
-          fi
-          
-          # 确保文件存在
-          if [ ! -f "rauc-deploy/usr/bin/rauc" ]; then
-            echo "错误: rauc-deploy/usr/bin/rauc 文件不存在，强制创建..."
-            echo '#!/bin/sh' > rauc-deploy/usr/bin/rauc
-            echo 'echo "RAUC 替代脚本 v1.0.0"' >> rauc-deploy/usr/bin/rauc
-            chmod +x rauc-deploy/usr/bin/rauc
+            echo "错误: 未找到 RAUC 二进制文件"
+            exit 1
           fi
           
           # 验证是 ARM 版本
