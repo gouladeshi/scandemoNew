@@ -13,18 +13,53 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install RAUC and create deployment package
+      - name: Install ARM cross-compilation tools
         run: |
-          # 安装 RAUC
           sudo apt-get update
-          sudo apt-get install -y rauc
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+          sudo apt-get install -y libc6-dev-armhf-cross
+          sudo apt-get install -y build-essential cmake pkg-config
+          sudo apt-get install -y libssl-dev libglib2.0-dev libjson-glib-dev
+          sudo apt-get install -y libcurl4-openssl-dev
+
+      - name: Download and compile RAUC for ARM
+        run: |
+          # 下载 RAUC 源码
+          git clone --depth 1 https://github.com/rauc/rauc.git
+          cd rauc
           
+          # 配置交叉编译
+          mkdir build && cd build
+          export CC=arm-linux-gnueabihf-gcc
+          export CXX=arm-linux-gnueabihf-g++
+          export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
+          
+          # 配置 CMake
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=arm \
+            -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
+            -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ \
+            -DCMAKE_FIND_ROOT_PATH=/usr/arm-linux-gnueabihf
+          
+          # 编译
+          make -j$(nproc)
+          
+          # 验证编译结果
+          file src/rauc
+          ls -la src/rauc
+
+      - name: Create RAUC deployment package
+        run: |
           # 创建部署目录结构
           mkdir -p rauc-deploy/usr/local/bin
           mkdir -p rauc-deploy/etc/rauc
           
-          # 复制 RAUC 二进制文件
-          cp /usr/bin/rauc rauc-deploy/usr/local/bin/
+          # 复制 ARM 版本的 RAUC 二进制文件
+          cp rauc/build/src/rauc rauc-deploy/usr/local/bin/
+          
+          # 验证是 ARM 版本
+          file rauc-deploy/usr/local/bin/rauc
           
           # 创建系统配置文件
           cat > rauc-deploy/etc/rauc/system.conf << 'EOF'
@@ -52,7 +87,7 @@ jobs:
           # 创建安装脚本
           cat > rauc-deploy/install.sh << 'EOF'
           #!/bin/bash
-          echo "=== 安装 RAUC ==="
+          echo "=== 安装 RAUC (ARM 版本) ==="
           
           # 复制二进制文件
           cp usr/local/bin/rauc /usr/local/bin/
@@ -72,10 +107,40 @@ jobs:
           /usr/local/bin/rauc --version
           /usr/local/bin/rauc status
           
-          echo "✓ RAUC 安装完成"
+          echo "✓ RAUC (ARM 版本) 安装完成"
           EOF
           
           chmod +x rauc-deploy/install.sh
+          
+          # 创建使用说明
+          cat > rauc-deploy/README.md << 'EOF'
+          # RAUC ARM 部署包
+          
+          ## 说明
+          这是为 ARM 设备交叉编译的 RAUC 版本，可以在无法连接外网的设备上直接使用。
+          
+          ## 使用方法
+          
+          1. 将整个 rauc-deploy 目录传输到设备
+          2. 在设备上执行: ./install.sh
+          3. 验证安装: /usr/local/bin/rauc --version
+          
+          ## 文件说明
+          
+          - usr/local/bin/rauc: ARM 版本的 RAUC 二进制文件
+          - etc/rauc/system.conf: 系统配置文件
+          - etc/rauc/rauc.cert: 证书文件
+          - etc/rauc/rauc.key: 私钥文件
+          - install.sh: 安装脚本
+          
+          ## 验证
+          
+          安装完成后，运行以下命令验证:
+          ```bash
+          /usr/local/bin/rauc --version
+          /usr/local/bin/rauc status
+          ```
+          EOF
           
           # 打包
           tar -czf rauc-deploy.tar.gz rauc-deploy/
@@ -92,3 +157,49 @@ jobs:
             rauc-deploy.tar.gz
             rauc-deploy/
           retention-days: 30
+
+      - name: Create Release
+        if: github.ref == 'refs/heads/main'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: rauc-arm-v${{ github.run_number }}
+          release_name: RAUC ARM Deployment Package
+          body: |
+            RAUC ARM 交叉编译部署包
+            
+            ## 说明
+            这是为 ARM 设备交叉编译的 RAUC 版本，可以在无法连接外网的设备上直接使用。
+            
+            ## 使用方法
+            
+            1. 下载 `rauc-deploy.tar.gz`
+            2. 传输到设备: `scp rauc-deploy.tar.gz root@设备IP:/tmp/`
+            3. 在设备上安装: 
+               ```bash
+               cd /tmp
+               tar -xzf rauc-deploy.tar.gz
+               cd rauc-deploy
+               ./install.sh
+               ```
+            
+            ## 验证安装
+            
+            ```bash
+            /usr/local/bin/rauc --version
+            /usr/local/bin/rauc status
+            ```
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Asset
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: rauc-deploy.tar.gz
+          asset_name: rauc-deploy.tar.gz
+          asset_content_type: application/gzip
