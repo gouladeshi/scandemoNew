@@ -180,7 +180,7 @@ jobs:
       - name: Create RAUC deployment package
         run: |
           # 创建部署目录结构
-          mkdir -p rauc-deploy/usr/bin
+          mkdir -p rauc-deploy/usr/bin/rauc
           mkdir -p rauc-deploy/etc/rauc
           
           # 复制 ARM 版本的 RAUC 二进制文件
