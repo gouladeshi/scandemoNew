@@ -28,6 +28,14 @@ jobs:
           git clone --depth 1 https://github.com/rauc/rauc.git
           cd rauc
           
+          # 检查源码结构
+          echo "源码目录内容:"
+          ls -la
+          
+          # 查找 CMakeLists.txt
+          echo "查找 CMakeLists.txt:"
+          find . -name "CMakeLists.txt" -type f
+          
           # 配置交叉编译
           mkdir build && cd build
           export CC=arm-linux-gnueabihf-gcc
