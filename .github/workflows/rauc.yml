@@ -1,256 +1,182 @@
-name: Build RAUC for ARM and Deploy
+name: Build RAUC OTA Framework
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-  workflow_dispatch:
-
-permissions:
-  contents: write
+    branches: [ main ]
 
 jobs:
   build-rauc:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install ARM cross-compilation tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
-          sudo apt-get install -y libc6-dev-armhf-cross
-          sudo apt-get install -y build-essential cmake pkg-config
-          sudo apt-get install -y libssl-dev libglib2.0-dev libjson-glib-dev
-          sudo apt-get install -y libcurl4-openssl-dev
-          sudo apt-get install -y wget git
-
-      - name: Download and compile RAUC for ARM
-        run: |
-          # 直接下载源码进行编译（RAUC 官方不提供预编译版本）
-          echo "下载 RAUC v1.14 源码进行交叉编译..."
-          wget https://github.com/rauc/rauc/releases/download/v1.14/rauc-1.14.tar.xz
-          tar -xf rauc-1.14.tar.xz
-          mv rauc-1.14 rauc
-          
-          echo "源码目录内容:"
-          ls -la rauc/
-          
-          # 检查源码结构
-          echo "查找 CMakeLists.txt:"
-          find rauc/ -name "CMakeLists.txt" -type f
-          
-          # 检查是否有 CMakeLists.txt
-          if [ ! -f "rauc/CMakeLists.txt" ]; then
-            echo "错误: 未找到 CMakeLists.txt"
-            echo "尝试从 Git 仓库获取最新版本:"
-            rm -rf rauc
-            git clone --depth 1 https://github.com/rauc/rauc.git
-            ls -la rauc/
-            find rauc/ -name "CMakeLists.txt" -type f
-          fi
-          
-          # 进入源码目录
-          cd rauc
-          
-          # 配置交叉编译
-          mkdir build && cd build
-          export CC=arm-linux-gnueabihf-gcc
-          export CXX=arm-linux-gnueabihf-g++
-          export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
-          
-          # 配置 CMake
-          cmake .. \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=arm \
-            -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
-            -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ \
-            -DCMAKE_FIND_ROOT_PATH=/usr/arm-linux-gnueabihf
-          
-          # 编译
-          make -j$(nproc)
-          
-          # 验证编译结果
-          file src/rauc
-          ls -la src/rauc
-          
-          # 如果编译失败，创建替代脚本
-          if [ ! -f "rauc/build/src/rauc" ]; then
-            echo "源码编译失败，创建简单的 RAUC 替代脚本..."
-            mkdir -p rauc/build/src
-            echo '#!/bin/sh' > rauc/build/src/rauc
-            echo '# 简单的 RAUC 替代脚本' >> rauc/build/src/rauc
-            echo 'case "$1" in' >> rauc/build/src/rauc
-            echo '  "bundle") echo "RAUC Bundle: $2" ;;' >> rauc/build/src/rauc
-            echo '  "install") echo "安装更新: $2" ;;' >> rauc/build/src/rauc
-            echo '  "status") echo "RAUC 状态: 未安装" ;;' >> rauc/build/src/rauc
-            echo '  "--version") echo "rauc-simple 1.0.0" ;;' >> rauc/build/src/rauc
-            echo '  *) echo "用法: $0 {bundle|install|status|--version}" ;;' >> rauc/build/src/rauc
-            echo 'esac' >> rauc/build/src/rauc
-            chmod +x rauc/build/src/rauc
-            echo "创建了简单的 RAUC 替代脚本"
-          fi
-
-      - name: Create RAUC deployment package
-        run: |
-          # 创建部署目录结构
-          mkdir -p rauc-deploy/usr/bin
-          mkdir -p rauc-deploy/etc/rauc
-          
-          # 复制 ARM 版本的 RAUC 二进制文件
-          echo "检查可用的 RAUC 文件..."
-          echo "rauc/build/src/rauc 存在: $([ -f "rauc/build/src/rauc" ] && echo "是" || echo "否")"
-          
-          if [ -f "rauc/build/src/rauc" ]; then
-            echo "使用编译的 RAUC 二进制文件"
-            cp rauc/build/src/rauc rauc-deploy/usr/bin/
-            echo "复制完成: rauc-deploy/usr/bin/rauc"
-          else
-            echo "错误: 未找到 RAUC 二进制文件"
-            exit 1
-          fi
-          
-          # 验证是 ARM 版本
-          file rauc-deploy/usr/bin/rauc
-          
-          # 创建系统配置文件
-          cat > rauc-deploy/etc/rauc/system.conf << 'CONF_EOF'
-          [system]
-          compatible=STM32MP1,ScanDemo
-          bootloader=u-boot
-          
-          [slot.rootfs.0]
-          device=/dev/mmcblk0p2
-          type=ext4
-          bootname=A
-          
-          [slot.rootfs.1]
-          device=/dev/mmcblk0p3
-          type=ext4
-          bootname=B
-          CONF_EOF
-          
-          # 生成密钥和证书
-          openssl genrsa -out rauc-deploy/etc/rauc/rauc.key 2048
-          openssl req -new -x509 -key rauc-deploy/etc/rauc/rauc.key \
-            -out rauc-deploy/etc/rauc/rauc.cert -days 365 \
-            -subj "/CN=STM32MP-OTA-Cert"
-          
-          # 创建安装脚本
-          cat > rauc-deploy/install.sh << 'INSTALL_EOF'
-          #!/bin/sh
-          echo "=== 安装 RAUC (ARM 版本) ==="
-          
-          # 检查文件是否存在
-          if [ ! -f "usr/bin/rauc" ]; then
-              echo "错误: 找不到 usr/bin/rauc 文件"
-              echo "当前目录内容:"
-              ls -la
-              echo "usr/bin 目录内容:"
-              ls -la usr/bin/ 2>/dev/null || echo "usr/bin 目录不存在"
-              exit 1
-          fi
-          
-          # 复制二进制文件到 /usr/bin（设备上肯定存在的路径）
-          cp usr/bin/rauc /usr/bin/
-          chmod +x /usr/bin/rauc
-          
-          # 创建配置目录
-          mkdir -p /etc/rauc
-          
-          # 复制配置文件
-          cp etc/rauc/* /etc/rauc/
-          chmod 644 /etc/rauc/rauc.cert
-          chmod 600 /etc/rauc/rauc.key
-          chmod 644 /etc/rauc/system.conf
-          
-          # 验证安装
-          echo "验证安装..."
-          /usr/bin/rauc --version
-          /usr/bin/rauc status
-          
-          echo "✓ RAUC (ARM 版本) 安装完成"
-          INSTALL_EOF
-          
-          chmod +x rauc-deploy/install.sh
-          
-          # 创建使用说明
-          cat > rauc-deploy/README.md << 'README_EOF'
-          # RAUC ARM 部署包
-          
-          ## 说明
-          这是为 ARM 设备交叉编译的 RAUC 版本，可以在无法连接外网的设备上直接使用。
-          
-          ## 使用方法
-          
-          1. 将整个 rauc-deploy 目录传输到设备
-          2. 在设备上执行: ./install.sh
-          3. 验证安装: /usr/bin/rauc --version
-          
-          ## 文件说明
-          
-          - usr/bin/rauc: ARM 版本的 RAUC 二进制文件
-          - etc/rauc/system.conf: 系统配置文件
-          - etc/rauc/rauc.cert: 证书文件
-          - etc/rauc/rauc.key: 私钥文件
-          - install.sh: 安装脚本
-          
-          ## 验证
-          
-          安装完成后，运行以下命令验证:
-          ```bash
-          /usr/local/bin/rauc --version
-          /usr/local/bin/rauc status
-          ```
-          README_EOF
-          
-          # 打包
-          tar -czf rauc-deploy.tar.gz rauc-deploy/
-          
-          # 显示包内容
-          echo "部署包内容:"
-          tar -tzf rauc-deploy.tar.gz | head -20
-
-      - name: Upload RAUC deployment package
-        uses: actions/upload-artifact@v4
-        with:
-          name: rauc-deploy-arm
-          path: |
-            rauc-deploy.tar.gz
-            rauc-deploy/
-          retention-days: 30
-
-      - name: Create Release
-        if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: rauc-arm-v${{ github.run_number }}
-          name: RAUC ARM Deployment Package
-          body: |
-            RAUC ARM 交叉编译部署包
-            
-            ## 说明
-            这是为 ARM 设备交叉编译的 RAUC 版本，可以在无法连接外网的设备上直接使用。
-            
-            ## 使用方法
-            
-            1. 下载 `rauc-deploy.tar.gz`
-            2. 传输到设备: `scp rauc-deploy.tar.gz root@设备IP:/tmp/`
-            3. 在设备上安装: 
-               ```bash
-               cd /tmp
-               tar -xzf rauc-deploy.tar.gz
-               cd rauc-deploy
-               ./install.sh
-               ```
-            
-            ## 验证安装
-            
-            ```bash
-            /usr/local/bin/rauc --version
-            /usr/local/bin/rauc status
-            ```
-          files: rauc-deploy.tar.gz
-          draft: false
-          prerelease: false
+    - uses: actions/checkout@v4
+    
+    - name: Set up cross-compilation environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          pkg-config \
+          libglib2.0-dev \
+          libssl-dev \
+          libarchive-dev \
+          libjson-glib-dev \
+          libcurl4-openssl-dev \
+          libmount-dev \
+          libblkid-dev \
+          libkmod-dev \
+          libsystemd-dev \
+          gcc-arm-linux-gnueabihf \
+          g++-arm-linux-gnueabihf
+        
+    - name: Build RAUC for ARM
+      run: |
+        # Download and build RAUC
+        cd /tmp
+        wget https://github.com/rauc/rauc/releases/download/v1.10/rauc-1.10.tar.xz
+        tar -xf rauc-1.10.tar.xz
+        cd rauc-1.10
+        
+        # Configure for ARM cross-compilation
+        export CC=arm-linux-gnueabihf-gcc
+        export CXX=arm-linux-gnueabihf-g++
+        export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
+        
+        ./configure \
+          --host=arm-linux-gnueabihf \
+          --prefix=/usr/local/rauc-arm \
+          --with-systemdunitdir=/lib/systemd/system \
+          --enable-service \
+          --disable-gtk-doc
+        
+        make -j$(nproc)
+        sudo make install
+        
+        # Create RAUC package for deployment
+        mkdir -p rauc-deploy
+        cp -r /usr/local/rauc-arm/* rauc-deploy/
+        
+        # Create deployment script
+        cat > rauc-deploy/install.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "Installing RAUC on target device..."
+        
+        # Copy binaries
+        sudo cp -r bin/* /usr/local/bin/
+        sudo cp -r lib/* /usr/local/lib/
+        sudo cp -r share/* /usr/local/share/
+        
+        # Create systemd service directory
+        sudo mkdir -p /lib/systemd/system
+        
+        # Enable RAUC service
+        sudo systemctl daemon-reload
+        sudo systemctl enable rauc
+        
+        echo "RAUC installation completed!"
+        EOF
+        
+        chmod +x rauc-deploy/install.sh
+        
+        # Package for deployment
+        tar -czf rauc-arm-deploy.tar.gz rauc-deploy/
+        
+    - name: Build Rust application
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: armv7-unknown-linux-gnueabihf
+        
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: Build Rust application
+      run: |
+        cargo build --release --target armv7-unknown-linux-gnueabihf
+        
+    - name: Create deployment package
+      run: |
+        mkdir -p deploy-package
+        
+        # Copy Rust binary
+        cp target/armv7-unknown-linux-gnueabihf/release/scan_demo deploy-package/
+        
+        # Copy UI files
+        cp -r ui deploy-package/
+        
+        # Copy scripts
+        cp -r scripts deploy-package/
+        
+        # Copy RAUC files
+        cp /tmp/rauc-arm-deploy.tar.gz deploy-package/
+        
+        # Create deployment script
+        cat > deploy-package/deploy.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "Deploying scan demo application..."
+        
+        # Extract and install RAUC
+        tar -xzf rauc-arm-deploy.tar.gz
+        cd rauc-deploy
+        sudo ./install.sh
+        cd ..
+        
+        # Install application
+        sudo mkdir -p /opt/scan-demo
+        sudo cp scan_demo /opt/scan-demo/
+        sudo cp -r ui /opt/scan-demo/
+        sudo cp -r scripts /opt/scan-demo/
+        sudo chmod +x /opt/scan-demo/scripts/run_device.sh
+        
+        # Create systemd service for scan demo
+        sudo tee /etc/systemd/system/scan-demo.service > /dev/null << 'SERVICE_EOF'
+        [Unit]
+        Description=Scan Demo Application
+        After=network.target
+        
+        [Service]
+        Type=simple
+        User=root
+        WorkingDirectory=/opt/scan-demo
+        ExecStart=/opt/scan-demo/scan_demo
+        Restart=always
+        RestartSec=5
+        
+        [Install]
+        WantedBy=multi-user.target
+        SERVICE_EOF
+        
+        sudo systemctl daemon-reload
+        sudo systemctl enable scan-demo
+        
+        echo "Deployment completed!"
+        echo "Start service with: sudo systemctl start scan-demo"
+        EOF
+        
+        chmod +x deploy-package/deploy.sh
+        
+        # Create OTA bundle structure
+        mkdir -p deploy-package/ota
+        
+        # Package everything
+        tar -czf scan-demo-rauc-deploy.tar.gz deploy-package/
+        
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: scan-demo-rauc-arm
+        path: scan-demo-rauc-deploy.tar.gz
+        retention-days: 30
