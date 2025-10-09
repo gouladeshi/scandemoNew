@@ -1,99 +1,207 @@
-name: Build ARMv7 + OTA bundle (Cortex-A7)
+name: Build RAUC OTA Framework
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
+    branches: [ main ]
 
 jobs:
-  build:
+  build-rauc:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: armv7-unknown-linux-gnueabihf
-
-      - name: Configure Cargo
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml << 'EOF'
-          [source.crates-io]
-          replace-with = 'ustc'
-          [source.ustc]
-          registry = "https://mirrors.ustc.edu.cn/crates.io-index"
-          [target.armv7-unknown-linux-gnueabihf]
-          linker = "arm-linux-gnueabihf-gcc"
-          EOF
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf rauc openssl tar
-
-      - name: Install cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Build
-        env:
-          RUSTFLAGS: -C target-feature=+neon
-        run: cross build --target armv7-unknown-linux-gnueabihf --release
-
-      - name: Generate RAUC keys
-        run: |
-          mkdir -p ota/keys
-          if [ ! -f ota/keys/rauc.key ]; then
-            openssl genrsa -out ota/keys/rauc.key 2048
-            openssl req -new -x509 -key ota/keys/rauc.key -out ota/keys/rauc.cert -days 365 \
-              -subj "/CN=STM32MP-OTA-Cert"
-          fi
-
-      - name: Create RAUC bundle
-        run: |
-          set -e
-          mkdir -p ota/output
-          BUNDLE_DIR="$(mktemp -d)"
-          
-          # 复制二进制文件
-          cp target/armv7-unknown-linux-gnueabihf/release/scan_demo "$BUNDLE_DIR/"
-          
-          # 创建简单manifest
-          cat > "$BUNDLE_DIR/manifest.raucm" << 'EOF'
-          [update]
-          compatible=STM32MP1,ScanDemo
-          
-          [image.scan-demo]
-          filename=scan_demo
-          EOF
-          
-          # 打包
-          rauc bundle \
-            --cert=ota/keys/rauc.cert \
-            --key=ota/keys/rauc.key \
-            "$BUNDLE_DIR" \
-            "ota/output/update-${{ github.sha }}.raucb"
-          
-          echo "✓ 打包成功"
-          ls -la ota/output/update-${{ github.sha }}.raucb
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: scan-demo-ota-armv7
-          path: |
-            target/armv7-unknown-linux-gnueabihf/release/scan_demo
-            ui/**
-            scripts/**
-            ota/output/update-${{ github.sha }}.raucb
-            ota/keys/rauc.cert
+    - uses: actions/checkout@v4
+    
+    - name: Set up cross-compilation environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          pkg-config \
+          gcc-arm-linux-gnueabihf \
+          g++-arm-linux-gnueabihf \
+          wget \
+          tar
+        
+    - name: Build RAUC for ARM
+      run: |
+        # Download and build RAUC
+        cd /tmp
+        wget https://github.com/rauc/rauc/releases/download/v1.10/rauc-1.10.tar.xz
+        tar -xf rauc-1.10.tar.xz
+        cd rauc-1.10
+        
+        # Install dependencies for RAUC
+        sudo apt-get install -y \
+          libglib2.0-dev \
+          libssl-dev \
+          libarchive-dev \
+          libjson-glib-dev \
+          libcurl4-openssl-dev \
+          libmount-dev \
+          libblkid-dev \
+          libkmod-dev \
+          libsystemd-dev \
+          libdbus-1-dev \
+          libdbus-1-dev:armhf \
+          autotools-dev \
+          autoconf \
+          automake \
+          libtool \
+          pkg-config
+        
+        # Configure for ARM cross-compilation
+        export CC=arm-linux-gnueabihf-gcc
+        export CXX=arm-linux-gnueabihf-g++
+        export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig
+        export PKG_CONFIG_LIBDIR=/usr/lib/arm-linux-gnueabihf/pkgconfig
+        export PKG_CONFIG_SYSROOT_DIR=/
+        
+        # Generate configure script if needed
+        if [ ! -f configure ]; then
+          autoreconf -fiv
+        fi
+        
+        # Debug pkg-config setup
+        echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
+        echo "PKG_CONFIG_LIBDIR: $PKG_CONFIG_LIBDIR"
+        echo "Available dbus pkg-config files:"
+        find /usr -name "*dbus*.pc" 2>/dev/null || echo "No dbus .pc files found"
+        
+        ./configure \
+          --host=arm-linux-gnueabihf \
+          --prefix=/usr/local/rauc-arm \
+          --with-systemdunitdir=/lib/systemd/system \
+          --enable-service \
+          --disable-gtk-doc
+        
+        make -j$(nproc)
+        sudo make install
+        
+        # Create RAUC package for deployment
+        mkdir -p rauc-deploy
+        cp -r /usr/local/rauc-arm/* rauc-deploy/
+        
+        # Create deployment script
+        cat > rauc-deploy/install.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "Installing RAUC on target device..."
+        
+        # Copy binaries
+        sudo cp -r bin/* /usr/local/bin/
+        sudo cp -r lib/* /usr/local/lib/
+        sudo cp -r share/* /usr/local/share/
+        
+        # Create systemd service directory
+        sudo mkdir -p /lib/systemd/system
+        
+        # Enable RAUC service
+        sudo systemctl daemon-reload
+        sudo systemctl enable rauc
+        
+        echo "RAUC installation completed!"
+        EOF
+        
+        chmod +x rauc-deploy/install.sh
+        
+        # Package for deployment
+        tar -czf rauc-arm-deploy.tar.gz rauc-deploy/
+        
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+        targets: armv7-unknown-linux-gnueabihf
+        
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: Build Rust application
+      run: |
+        cargo build --release --target armv7-unknown-linux-gnueabihf
+        
+    - name: Create deployment package
+      run: |
+        mkdir -p deploy-package
+        
+        # Copy Rust binary
+        cp target/armv7-unknown-linux-gnueabihf/release/scan_demo deploy-package/
+        
+        # Copy UI files
+        cp -r ui deploy-package/
+        
+        # Copy scripts
+        cp -r scripts deploy-package/
+        
+        # Copy RAUC files
+        cp /tmp/rauc-arm-deploy.tar.gz deploy-package/
+        
+        # Create deployment script
+        cat > deploy-package/deploy.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "Deploying scan demo application..."
+        
+        # Extract and install RAUC
+        tar -xzf rauc-arm-deploy.tar.gz
+        cd rauc-deploy
+        sudo ./install.sh
+        cd ..
+        
+        # Install application
+        sudo mkdir -p /opt/scan-demo
+        sudo cp scan_demo /opt/scan-demo/
+        sudo cp -r ui /opt/scan-demo/
+        sudo cp -r scripts /opt/scan-demo/
+        sudo chmod +x /opt/scan-demo/scripts/run_device.sh
+        
+        # Create systemd service for scan demo
+        sudo tee /etc/systemd/system/scan-demo.service > /dev/null << 'SERVICE_EOF'
+        [Unit]
+        Description=Scan Demo Application
+        After=network.target
+        
+        [Service]
+        Type=simple
+        User=root
+        WorkingDirectory=/opt/scan-demo
+        ExecStart=/opt/scan-demo/scan_demo
+        Restart=always
+        RestartSec=5
+        
+        [Install]
+        WantedBy=multi-user.target
+        SERVICE_EOF
+        
+        sudo systemctl daemon-reload
+        sudo systemctl enable scan-demo
+        
+        echo "Deployment completed!"
+        echo "Start service with: sudo systemctl start scan-demo"
+        EOF
+        
+        chmod +x deploy-package/deploy.sh
+        
+        # Create OTA bundle structure
+        mkdir -p deploy-package/ota
+        
+        # Package everything
+        tar -czf scan-demo-rauc-deploy.tar.gz deploy-package/
+        
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: scan-demo-rauc-arm
+        path: scan-demo-rauc-deploy.tar.gz
+        retention-days: 30
