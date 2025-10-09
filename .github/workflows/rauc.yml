@@ -20,17 +20,10 @@ jobs:
           build-essential \
           cmake \
           pkg-config \
-          libglib2.0-dev \
-          libssl-dev \
-          libarchive-dev \
-          libjson-glib-dev \
-          libcurl4-openssl-dev \
-          libmount-dev \
-          libblkid-dev \
-          libkmod-dev \
-          libsystemd-dev \
           gcc-arm-linux-gnueabihf \
-          g++-arm-linux-gnueabihf
+          g++-arm-linux-gnueabihf \
+          wget \
+          tar
         
     - name: Build RAUC for ARM
       run: |
@@ -40,10 +33,33 @@ jobs:
         tar -xf rauc-1.10.tar.xz
         cd rauc-1.10
         
+        # Install dependencies for RAUC
+        sudo apt-get install -y \
+          libglib2.0-dev \
+          libssl-dev \
+          libarchive-dev \
+          libjson-glib-dev \
+          libcurl4-openssl-dev \
+          libmount-dev \
+          libblkid-dev \
+          libkmod-dev \
+          libsystemd-dev \
+          autotools-dev \
+          autoconf \
+          automake \
+          libtool \
+          pkg-config
+        
         # Configure for ARM cross-compilation
         export CC=arm-linux-gnueabihf-gcc
         export CXX=arm-linux-gnueabihf-g++
         export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
+        export PKG_CONFIG_LIBDIR=/usr/lib/arm-linux-gnueabihf/pkgconfig
+        
+        # Generate configure script if needed
+        if [ ! -f configure ]; then
+          autoreconf -fiv
+        fi
         
         ./configure \
           --host=arm-linux-gnueabihf \
