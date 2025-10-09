@@ -86,14 +86,14 @@ jobs:
         # Package for deployment
         tar -czf rauc-arm-deploy.tar.gz rauc-deploy/
         
-    - name: Build Rust application
-      uses: actions-rs/toolchain@v1
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: stable
-        target: armv7-unknown-linux-gnueabihf
+        targets: armv7-unknown-linux-gnueabihf
         
     - name: Cache cargo registry
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
@@ -175,7 +175,7 @@ jobs:
         tar -czf scan-demo-rauc-deploy.tar.gz deploy-package/
         
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: scan-demo-rauc-arm
         path: scan-demo-rauc-deploy.tar.gz
